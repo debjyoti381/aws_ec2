@@ -18,42 +18,36 @@ load_dotenv()
 # Set environment variable for Google API Key
 os.environ["GOOGLE_API_KEY"] = "AIzaSyARxm0Lk5SXSHRMt_Rw3iklQrVQcGRgVCA"
 
-# Step 2: Load multiple CSV files from AWS S3 and convert them to a combined string
-def get_combined_csv_text_from_s3(bucket_name, prefix):
+# Step 2: Load multiple CSV files from local folder
+def get_combined_csv_text_from_local(folder_path):
     """
-    Fetch all CSV files from the specified S3 bucket and prefix,
+    Fetch all CSV files from the specified local folder,
     combine their content into a single string.
 
     Args:
-        bucket_name (str): Name of the S3 bucket.
-        prefix (str): Prefix or folder path in the bucket.
+        folder_path (str): Path to the local folder containing CSV files.
 
     Returns:
         str: Combined text of all CSV files.
     """
-    s3 = boto3.client('s3')
     all_text = []
 
-    # List objects in the bucket with the specified prefix
-    response = s3.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
-    if 'Contents' not in response:
-        raise FileNotFoundError(f"No files found in bucket '{bucket_name}' with prefix '{prefix}'.")
-
-    # Iterate over all objects
-    for obj in response['Contents']:
-        key = obj['Key']
-        if key.endswith('.csv'):
-            print(f"Processing file: {key}")
-            # Fetch the file content
-            csv_object = s3.get_object(Bucket=bucket_name, Key=key)
-            csv_content = csv_object['Body'].read().decode('utf-8')
+    # Iterate over all CSV files in the folder
+    for file_name in os.listdir(folder_path):
+        if file_name.endswith('.csv'):
+            print(f"Processing file: {file_name}")
+            file_path = os.path.join(folder_path, file_name)
 
             # Read CSV content into pandas DataFrame and convert to text
-            df = pd.read_csv(StringIO(csv_content))
-            all_text.append(df.to_string(index=False))
+            try:
+                df = pd.read_csv(file_path)
+                all_text.append(df.to_string(index=False))
+            except Exception as e:
+                print(f"Error processing file {file_name}: {e}")
 
     # Combine all text
     return "\n".join(all_text)
+
 
 # Step 3: Split text into manageable chunks and create Document objects
 def get_text_chunks(text):
@@ -61,12 +55,14 @@ def get_text_chunks(text):
     chunks = text_splitter.split_text(text)
     return [Document(page_content=chunk, metadata={"id": str(i)}) for i, chunk in enumerate(chunks)]
 
+
 # Step 4: Set up the FAISS vector store with embeddings
 def setup_vectorstore(docs):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
     vectorstore = FAISS.from_documents(documents=docs, embedding=embeddings)
     vectorstore.save_local("faiss_index")
     return vectorstore
+
 
 # Step 5: Set up the RAG chain with Google Gemini API
 def setup_rag_chain(vectorstore, model_name="gemini-1.5-flash"):
@@ -89,19 +85,23 @@ def setup_rag_chain(vectorstore, model_name="gemini-1.5-flash"):
     )
     return chain
 
+
 # Step 6: Handle the query and return an answer
 def answer_question(chain, query):
     answer = chain.invoke(query)
     return answer
 
+
 # --- Main Execution ---
 
-# S3 bucket and prefix for CSV files
-s3_bucket_name = "datasetschatbot"  # Replace with your S3 bucket name
-s3_prefix = "csv_files/"  # Replace with your folder prefix
+# Path to the local folder containing CSV files
+local_folder_path = "./csv_files"
 
-# Step 1: Load and process CSV data from S3
-raw_text = get_combined_csv_text_from_s3(s3_bucket_name, s3_prefix)
+# Step 1: Load and process CSV data from local folder
+raw_text = get_combined_csv_text_from_local(local_folder_path)
+if not raw_text.strip():
+    raise ValueError("No valid CSV content was found.")
+
 docs = get_text_chunks(raw_text)
 
 # Step 2: Set up the FAISS vector store
